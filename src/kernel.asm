@@ -1,44 +1,101 @@
-; very normal bootloader, basically straight from wiki
-
-org 0x7c00
+org 0x7e00
 bits 16
 
-start:
-    cli
-    cld
-    xor ax, ax
+section .data
+align 4
+lfb_addr:  dd 0
+KEYS: dd 128 dup(0)
+mode_info: times 256 db 0
+
+align 8
+gdt:
+    dq 0x0000000000000000
+    dq 0x00cf9a000000ffff
+    dq 0x00cf92000000ffff
+gdt_desc:
+    dw gdt_desc - gdt - 1
+    dd gdt
+
+mcs_end:
+
+section .bss
+section .text
+kernel_init:
+    mov ax, 0x4f02
+    mov bx, 0x11f | 0x4000
+    int 0x10
+
+    mov ax, 0x4f01
+    mov cx, 0x11f
+    mov di, mode_info
+    int 0x10
+
+    mov eax, [mode_info + 0x28]
+    mov [lfb_addr], eax
+
+    in al, 0x92
+    or al, 2
+    out 0x92, al
+
+    lgdt [gdt_desc]
+    mov eax, cr0
+    or eax, 1
+    mov cr0, eax
+
+    jmp 0x08:pm_start
+
+bits 32
+pm_start:
+    mov ax, 0x10
     mov ds, ax
     mov es, ax
     mov ss, ax
-    mov sp, 0x7c00
+    mov esp, 0x9FFF0
 
-    mov [dap_num_sectors], word 127 
-    mov [dap_offset], word 0x7e00 
-    mov [dap_segment], word 0x0000
-    mov dword [dap_lba], 1          
+    mov esi, ap_mcs
+    mov edi, 0x10000
+    mov ecx, mcs_end - ap_mcs
+    rep movsb
 
-    mov si, dap
-    mov ah, 0x42
-    mov dl, 0x80   
-    int 0x13
-    jc disk_error
+    mov eax, 0xFEE00300
+    mov edx, 0x000C4500
+    mov [eax], edx
 
-    jmp 0x0000:0x7e00 
+    mov ecx, 0x1000000
+.delay: 
+    loop .delay
 
-disk_error:
-    mov ah, 0x0e
-    mov al, 'E' ; means error
-    int 0x10
-    hlt
+    mov edx, 0x000C4610
+    mov [eax], edx
 
-align 4
-dap:
-    db 0x10
-    db 0
-dap_num_sectors: dw 0
-dap_offset:      dw 0
-dap_segment:     dw 0
-dap_lba:         dq 0
+    jmp parallel
 
-times 510-($-$$) db 0
-dw 0xAA55
+bits 16
+ap_mcs:
+    cli
+    xor ax, ax
+    mov ds, ax
+    lgdt [gdt_desc] 
+    mov eax, cr0
+    or eax, 1
+    mov cr0, eax
+    jmp 0x08:ap_pm_entry
+ap_mcs_end:
+
+bits 32
+ap_pm_entry:
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+    
+    mov eax, 0xFEE00020
+    mov ebx, [eax]
+    shr ebx, 24              
+    mov eax, 100*50 + 4 + 4 + 64 + 3000  ; change this to whatever
+    mul ebx ; ebx stays the same
+    mov esp, 0x9FFF0 ; stack begin!
+    sub esp, eax
+    jmp parallel
+
+parallel:
